@@ -9,7 +9,9 @@ from urllib.parse import urlparse, parse_qs
 from scrapy.exceptions import CloseSpider
 # from getMovieList import getMovieList  # Assumes br works with BeautifulSoup or Scrapy-compatible page
 from scrapy.exceptions import CloseSpider
+from dotenv import load_dotenv
 
+load_dotenv()  # Load environment variables from .env file
 from scrapy.utils.project import get_project_settings
 
 def clean_text(text):
@@ -477,7 +479,7 @@ class BluRaySpider(scrapy.Spider):
                             'amazon_link': amzn_link, 
                             'ebay_link': ebay_link, 
                             'image_urls': image_urls,
-                            'proxy': f'http://5dc3b8d17d214978b568aa517ec31888:@api.zyte.com:8011',
+                            'proxy': f'http://{os.getenv('ZYTE_KEY')}:@api.zyte.com:8011',
                             # 'browserHtml': True 
                         },
                         dont_filter=True
@@ -527,7 +529,7 @@ class BluRaySpider(scrapy.Spider):
                         'amazon_link': amzn_link, 
                         'ebay_link': ebay_link, 
                         'image_urls': image_urls,
-                        'proxy': f'http://5dc3b8d17d214978b568aa517ec31888:@api.zyte.com:8011',
+                        'proxy': f'http://{os.getenv('ZYTE_KEY')}:@api.zyte.com:8011',
                         # 'browserHtml': True 
                     },
                     dont_filter=True
@@ -545,7 +547,7 @@ class BluRaySpider(scrapy.Spider):
                         'movie_details': movie_details, 
                         'target_title': movie_details['title'], 
                         'max_results': 4,
-                        'proxy': f'http://5dc3b8d17d214978b568aa517ec31888:@api.zyte.com:8011',
+                        'proxy': f'http://{os.getenv('ZYTE_KEY')}:@api.zyte.com:8011',
                     },
                     dont_filter=True
                 )
@@ -634,7 +636,7 @@ class BluRaySpider(scrapy.Spider):
                     'movie_details': movie_details, 
                     'target_title': movie_details['title'], 
                     'max_results': 4,
-                    'proxy': f'http://5dc3b8d17d214978b568aa517ec31888:@api.zyte.com:8011',
+                    'proxy': f'http://{os.getenv('ZYTE_KEY')}:@api.zyte.com:8011',
                 },
                 dont_filter=True
             )
