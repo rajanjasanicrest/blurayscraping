@@ -7,9 +7,13 @@ import requests
 from collections import defaultdict
 from urllib.parse import urlparse, parse_qs
 from scrapy.exceptions import CloseSpider
+# from getMovieList import getMovieList  # Assumes br works with BeautifulSoup or Scrapy-compatible page
+from scrapy.exceptions import CloseSpider
+from dotenv import load_dotenv
 
-# from getMovieList import getMovieList  # Assumes it works with BeautifulSoup or Scrapy-compatible page
+load_dotenv()  # Load environment variables from .env file
 from scrapy.utils.project import get_project_settings
+
 def clean_text(text):
     """Remove special characters and extra spaces from the title."""
     return re.sub(r'[^a-zA-Z0-9 ]', '', text).strip().lower()
@@ -61,9 +65,9 @@ def extract_image_urls(response):
     return image_urls
 
 
-class BluRaySpider(scrapy.Spider):
+class BluRaySpider4k(scrapy.Spider):
     name = "bluray_4k"
-    series = '3D'
+    series = '4K'
 
     custom_settings = {
         'USER_AGENT': 'Mozilla/5.0',
@@ -71,80 +75,134 @@ class BluRaySpider(scrapy.Spider):
         # Add proxy or middleware settings here if needed
     }
 
-
-    def __init__(self, year=None, *args, **kwargs):
+    def __init__(self, country, year=2019, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.year = int(year) if year else 2023
-        self.base_data_path = "data"
-        self.movies_list_path = f'3dmovie_list/{self.year}-list.json'
-        self.year = str(year)
-
+        
         os.makedirs("data", exist_ok=True)
-
-        # self.existing_data = self.load_existing_data()
-        self.existing_data = []
-        # self.scraped_urls = {x['blu_ray_url'] for x in self.existing_data if x}
-        # self.movies_list = self.load_or_generate_movie_list()
+        self.years = list(range(2006, 2025))
+        self.years.append(1969)
+        # self.year = int(year) if year else 2019
+        self.base_data_path = "data"
+        # self.movies_list_path = f'dvd_list/{self.year}-list.json'
+        self.year = str(year)
+        self.country = country
+        print('-------')
+        print(country)
+        print('-------')
+        try:        
+            with open(f'data/4k-{self.country}.json', 'r', encoding='utf-8') as f:
+                self.existing_data = json.load(f)
+        except FileNotFoundError:
+            self.existing_data = []
+        
+        if self.existing_data:
+            self.existing_data = [item['blu_ray_url'] for item in self.existing_data]
+        
 
     def start_requests(self):
-        if self.series == '3D':
-            url = f'https://www.blu-ray.com/movies/search.php?releaseyear={self.year}&other_bluray3d=1&submit=Search&action=search&page=0'
-        elif self.series == 'DVD':
-            url = f'https://www.blu-ray.com/dvd/search.php?releaseyear={self.year}&&submit=Search&action=search&page=0'
-        yield scrapy.Request(
-            url=url,
-            callback=self.parse_movie_list,
-            meta={'page':0},
-            cookies={
-                "country": "uk",
-                "listlayout_7": "simple",
-                "listlayout_21": "simple",
-            }
-        )
-    
-    def parse_movie_list(self, response):
-        page = response.meta["page"]
-        movie_links = response.xpath('//table[@class="bevel"]//a[contains(@href, "/dvd/")]/@href').getall()
-
-        print('here')
-        for link in movie_links:
-            print('there')
-            absolute_url = response.urljoin(link)
+        for year in self.years:
+            url = f'https://www.blu-ray.com/movies/search.php?releaseyear={year}&ultrahd=1&submit=Search&action=search&page=0'
+            
             yield scrapy.Request(
-                url=absolute_url,
-                callback=self.parse_movie_detail,
-                meta={'movie_url': absolute_url},
+                url=url,
+                callback=self.parse_movie_list,
+                meta={'page':0, 'year': year},
                 cookies={
-                    "country": "uk",
+                    "country": self.country,
                     "listlayout_7": "simple",
                     "listlayout_21": "simple",
                 }
             )
+    
+    def parse_movie_list(self, response):
+        if response.status == 403:
+            if not hasattr(self, 'closed_due_to_403'):
+                self.closed_due_to_403 = True
+            if not self.closed_due_to_403:
+                self.closed_due_to_403 = True
+                self.logger.warning("403 Forbidden received. Closing spider.")
+                raise CloseSpider(reason="403 Forbidden")
+            return
+
+        if not response.xpath('//a[@href="https://www.blu-ray.com/"]'):
+            raise CloseSpider(reason="IP blocked or blank page")
+
+        page = response.meta["page"]
+        year = response.meta["year"]
+        movie_links = response.xpath('//table[@class="bevel"]//a[contains(@href, "/movies/")]/@href').getall()
         
-        if page == 1:
+        # Track processed URLs to avoid duplicates
+        if not hasattr(self, 'processed_urls'):
+            self.processed_urls = set()
+        
+        unique_links = []
+        for link in movie_links:
+            absolute_url = response.urljoin(link)
+            if absolute_url not in self.processed_urls and absolute_url not in self.existing_data:
+                unique_links.append(absolute_url)
+                self.processed_urls.add(absolute_url)
+
+        self.logger.info(f"Page {page}: Found {len(movie_links)} total links, {len(unique_links)} unique new links")
+
+        for absolute_url in unique_links:
+            yield scrapy.Request(
+                url=absolute_url,
+                callback=self.parse_movie_detail,
+                meta={'movie_url': absolute_url, 'year': year},
+                cookies={
+                    "country": 'us',
+                    "listlayout_7": "simple",
+                    "listlayout_21": "simple",
+                }
+            )
+
+        # Only calculate pagination on first page
+        if page == 0:
             total_text = response.css(".oswaldcollection::text").get()
             match = re.search(r'\d+', total_text)
             if match:
                 movies_number = int(match.group())
                 total_pages = math.ceil(movies_number / 20)
-                self.logger.info(f"{movies_number} movies to scrape for year {self.year} across {total_pages} pages.")
+                self.logger.info(f"{movies_number} movies to scrape for year {year} across {total_pages} pages.")
 
-                for page_no in range(2, total_pages + 1):
-                    url = f"{self.base_url}&page={page_no}"
+                # Start from page 1 instead of page 2, or check what the actual pagination scheme is
+                for page_no in range(1, total_pages):  # Changed from range(2, total_pages + 1)
+                    url = f"https://www.blu-ray.com/movies/search.php?releaseyear={year}&ultrahd=1&submit=Search&action=search&page={page_no}"
                     yield scrapy.Request(
                         url=url,
-                        callback=self.parse_movies_list,
-                        meta={"page": page_no},
+                        callback=self.parse_movie_list,
+                        meta={"page": page_no, 'year': year},
                         cookies={
-                        "country": "uk",
-                        "listlayout_7": "simple",
-                        "listlayout_21": "simple",
-                    }
+                            "country": self.country,
+                            "listlayout_7": "simple",
+                            "listlayout_21": "simple",
+                        }
                     )
+        
+        # Alternative: Check if this page has results, if not, stop pagination
+        elif len(movie_links) == 0:
+            self.logger.info(f"No more results found on page {page}, stopping pagination")
+            return
+
 
     def parse_movie_detail(self, response):
+        year = response.meta['year']
+        if response.status == 403:
+            if not self.closed_due_to_403:
+                self.closed_due_to_403 = True
+                self.logger.warning("403 Forbidden received. Closing spider.")
+                raise CloseSpider(reason="403 Forbidden")
+            return
+        elif response.status == 404:
+            yield {
+                "blu_ray_url": response.url
+            }
+            return
+        if not response.xpath('//a[@href="https://www.blu-ray.com/"]'):
+            raise CloseSpider(reason="IP blocked or blank page")
+
         movie_href = response.url
-        year = self.year
+        # year = self.year
 
         blu_ray_id = movie_href.split('/')[-2]
         movie_details = {
@@ -153,7 +211,8 @@ class BluRaySpider(scrapy.Spider):
             'missing_links': False
         }
 
-        core_info = response.css('.subheading.grey::text').get()
+        core_info = response.css('span.subheading.grey ::text').getall()
+        core_info = ' '.join(t.strip() for t in core_info if t.strip())
         core_texts = [t.strip() for t in core_info.split('|')] if core_info else []
 
         movie_details["production"] = ""
@@ -204,14 +263,12 @@ class BluRaySpider(scrapy.Spider):
         # Audio
         audio_lines = response.css('div#longaudio::text').getall()
         audio_text = ", ".join([line.strip() for line in audio_lines if line.strip()])
-        if 'less' in audio_text: audio_text.replace('("less")', '') 
-        movie_details['audio'] = audio_text
+        movie_details['audio'] = audio_text.replace(', (, )', '').replace('("less")', '').replace('(, )', '')
 
         # Subtitles
         subs = response.css('div#longsubs::text').getall()
         subs_text = ", ".join([s.strip() for s in subs if s.strip()])
-        if 'less' in subs_text: subs_text.replace('("less")', '')
-        movie_details['subtitles'] = subs_text
+        movie_details['subtitles'] = subs_text.replace(', (, )', '').replace('("less")', '').replace('(, )', '')
 
         # Pricing
         pricing_td_html = response.xpath("//td[@width='266px']").get()
@@ -244,7 +301,6 @@ class BluRaySpider(scrapy.Spider):
         # cast and crew
         cast_crew_page_url = response.xpath("//a[contains(@href, '#Castandcrew')]/@href").get()
         if cast_crew_page_url:
-            print(cast_crew_page_url)
             pass
         else:
             movie_details['cast_and_crew2'] = {}
@@ -287,18 +343,14 @@ class BluRaySpider(scrapy.Spider):
 
         # Amazon ID
         amzn_link = response.css("#movie_buylink::attr(href)").get()
-        ebay_link = response.css("a[href*='ebay.com/sch/']::attr(href)").get()
+        ebay_link = response.css("a[href*='/sch/i.html?_nkw=']::attr(href)").get()
         if ebay_link:
-            print('----------------------------------')
-            print('here')
-            print('----------------------------------')
             upc = movie_details.get('upc') or parse_qs(urlparse(ebay_link).query).get('_nkw', [''])[0]
-            print(upc)
             movie_details['upc'] = upc
 
         # images:
         image_urls = extract_image_urls(response)
-        movie_details['image_urls'] = image_urls
+        movie_details.update(**image_urls)
 
         # screenshots:
         # Now go to screenshots page
@@ -311,7 +363,7 @@ class BluRaySpider(scrapy.Spider):
                 meta={'blu_ray_id': blu_ray_id, 'movie_details': movie_details, 'amazon_link': amzn_link, 'ebay_link': ebay_link, 'image_urls': image_urls, "screenshot_page": True, 'cast_crew_page_url': cast_crew_page_url},
                 dont_filter=True,
                     cookies={
-                    "country": "uk",
+                    "country": 'us',
                     "listlayout_7": "simple",
                     "listlayout_21": "simple",
                 }
@@ -323,16 +375,22 @@ class BluRaySpider(scrapy.Spider):
                 meta={'blu_ray_id':blu_ray_id, 'movie_details': movie_details, 'amazon_link': amzn_link, 'ebay_link': ebay_link, 'image_urls': image_urls, "screenshot_page": False, 'cast_crew_page_url': cast_crew_page_url},
                 dont_filter=True,
                 cookies={
-                    "country": "uk",
+                    "country": 'us',
                     "listlayout_7": "simple",
                     "listlayout_21": "simple",
                 }
             )
 
     def parse_screenshots(self, response):
+        if response.status == 403:
+            if not self.closed_due_to_403:
+                self.closed_due_to_403 = True
+                self.logger.warning("403 Forbidden received. Closing spider.")
+                raise CloseSpider(reason="403 Forbidden")
+            return
         movie_details = response.meta['movie_details']
         blu_ray_id = response.meta['blu_ray_id']
-
+        
         if not response.xpath('//a[@href="https://www.blu-ray.com/"]'):
             raise CloseSpider(reason="IP blocked or blank page")
 
@@ -393,14 +451,13 @@ class BluRaySpider(scrapy.Spider):
         movie_details['screenshot_urls'] = screenshot_urls
 
         if cast_crew_page_url := response.meta.get('cast_crew_page_url'):
-            print(cast_crew_page_url)
             yield scrapy.Request(
                 url=f'https://www.blu-ray.com/movies/movies.php?id={blu_ray_id}&action=showcastandcrew&page=',
                 callback=self.parse_cast_and_crew,
                 meta={'movie_details': movie_details, 'amazon_link': response.meta['amazon_link'], 'ebay_link': response.meta['ebay_link'], 'image_urls': response.meta['image_urls']},
                 dont_filter=True,
                 cookies={
-                    "country": "uk",
+                    "country": 'us',
                     "listlayout_7": "simple",
                     "listlayout_21": "simple",
                 }
@@ -409,10 +466,35 @@ class BluRaySpider(scrapy.Spider):
             amzn_link = response.meta['amazon_link']
             ebay_link = response.meta['ebay_link']
             image_urls = response.meta['image_urls']
-            yield movie_details
-            
+            if amzn_link:
+                try:
+                    final_url = requests.get(amzn_link, timeout=100).url
+                    amazon_id = final_url.split("?")[0].split("/")[-1]
+                    movie_details["amazon_id"] = amazon_id
+                    yield scrapy.Request(
+                        url=f'https://camelcamelcamel.com/product/{amazon_id}',
+                        callback=self.parse_camelcamelcamel,
+                        meta={
+                            'movie_details': movie_details, 
+                            'amazon_link': amzn_link, 
+                            'ebay_link': ebay_link, 
+                            'image_urls': image_urls,
+                            'proxy': f'http://{os.getenv('ZYTE_KEY')}:@api.zyte.com:8011',
+                            # 'browserHtml': True 
+                        },
+                        dont_filter=True
+                    )
+                    
+                except Exception as e:
+                    self.logger.warning({e})
     
     def parse_cast_and_crew(self, response):
+        if response.status == 403:
+            if not self.closed_due_to_403:
+                self.closed_due_to_403 = True
+                self.logger.warning("403 Forbidden received. Closing spider.")
+                raise CloseSpider(reason="403 Forbidden")
+            return
         movie_details = response.meta['movie_details']
         amzn_link = response.meta['amazon_link']
         ebay_link = response.meta['ebay_link']
@@ -424,7 +506,6 @@ class BluRaySpider(scrapy.Spider):
             
             # Get the role (Director, Writer, etc.)
             role = table.css("td:nth-child(2) h5::text").get()
-            print(role)
             if not role:
                 continue
 
@@ -435,7 +516,6 @@ class BluRaySpider(scrapy.Spider):
                     cast_crew_data[role].append(name)
 
         movie_details.update( {'cast_and_crew': dict(cast_crew_data)} )
-
         if amzn_link:
             try:
                 final_url = requests.get(amzn_link, timeout=100).url
@@ -450,16 +530,32 @@ class BluRaySpider(scrapy.Spider):
                         'ebay_link': ebay_link, 
                         'image_urls': image_urls,
                         'proxy': f'http://{os.getenv('ZYTE_KEY')}:@api.zyte.com:8011',
-                        'browserHtml': True 
+                        # 'browserHtml': True 
                     },
                     dont_filter=True
                 )
                 
             except Exception as e:
                 self.logger.warning({e})
-
+        else:
+            upc = movie_details.get('upc', None)
+            if upc: 
+                yield scrapy.Request(
+                    url=f'https://www.ebay.com/sch/i.html?_nkw={upc}',
+                    callback=self.parse_epid_results,
+                    meta={
+                        'movie_details': movie_details, 
+                        'target_title': movie_details['title'], 
+                        'max_results': 4,
+                        'proxy': f'http://{os.getenv('ZYTE_KEY')}:@api.zyte.com:8011',
+                    },
+                    dont_filter=True
+                )
+            else:
+                yield movie_details
 
     def parse_camelcamelcamel(self, response):
+        
         movie_details = response.meta['movie_details']
         amzn_link = response.meta['amazon_link']
         ebay_link = response.meta['ebay_link']
@@ -471,56 +567,68 @@ class BluRaySpider(scrapy.Spider):
         product_details = {}
 
         # table with product identifiers
-        tables = response.xpath("//table[contains(@class, 'product_fields') or @id='product_fields']")
+        tables = response.xpath("//table[@class='product_fields']")
+
         if tables:
             rows = tables[0].xpath(".//tr")
             for row in rows:
-                key = row.xpath("./td[1]//text()").get(default="").strip().lower().replace(':', '')
+                key = row.xpath("./td[1]//text()").getall()
+                key = ''.join(key).replace('\u200b', '').strip()
+
                 value_parts = row.xpath("./td[2]//text()").getall()
                 value = ''.join(value_parts).replace('\u200b', '').strip()
-
                 key_mappings = {
                     'manufacturer': 'Manufacturer',
                     'isbn': 'ISBN',
                     'ean': 'EAN',
-                    'upc': 'UPC_2',
+                    'upc': 'UPC',
                     'sku': 'SKU',
                     'asin': 'ASIN'
                 }
                 for key_pattern, standard_key in key_mappings.items():
-                    if key_pattern in key:
+                    if standard_key in key:
                         if value:
-                            product_details[standard_key] = value
+                            product_details[key_pattern] = value
                         break
         else:
             self.logger.warning("Product details table not found")
 
+        
         # price table
-        price_rows = response.xpath("//tbody/tr")
-        for row in price_rows:
-            category = row.xpath("./@data-field").get(default="").strip()
-            prices = row.xpath("./td//text()").getall()
-            clean_prices = [p.strip().replace('$', '').split('(')[0] for p in prices if p.strip()]
+        rows = response.xpath("//div[@class='table-scroll camelegend']//table//tr")
 
-            if category == 'amazon' and len(clean_prices) >= 2:
-                product_details['amazon_average_price'] = clean_prices[-2]
-                product_details['amazon_current_price'] = clean_prices[-1]
-            elif category == 'used' and len(clean_prices) >= 2:
-                product_details['third_used_average_price'] = clean_prices[-2]
-                product_details['third_used_current_price'] = clean_prices[-1]
+        for row in rows:
+            label = row.xpath(".//td[1]/text()").getall()
+            if not label:
+                continue
+            label = [t.strip() for t in label if t.strip()][0].lower()
 
-        for k in ['UPC_2', 'Manufacturer', 'ISBN', 'EAN', 'SKU']:
+            # Extract current and average prices from the appropriate columns
+            current_price = row.xpath("./td[4]/text()[1]").get(default="").strip()
+            average_price = row.xpath("./td[5]/text()[1]").get(default="").strip()
+
+            if "amazon" in label:
+                product_details["amazon_current_price"] = current_price.replace('$','') if current_price != "-" else '-'
+                product_details["amazon_average_price"] = average_price.replace('$','') if average_price != "-" else '-'
+            elif "3rd party used" in label:
+                product_details["third_used_current_price"] = current_price.replace('$','') if current_price != "-" else '-'
+                product_details["third_used_average_price"] = average_price.replace('$','') if average_price != "-" else 'None'
+
+
+        for k in ['upc', 'manufacturer', 'isbn', 'ean', 'sku']:
+            if k == 'upc':
+                if k not in product_details: continue
             movie_details[k.lower()] = product_details.get(k, '')
+
         movie_details.update({
-            'amazon_current_price': product_details.get('amazon_current_price', ''),
-            'amazon_average_price': product_details.get('amazon_average_price', ''),
-            'third_used_current_price': product_details.get('third_used_current_price', ''),
-            'third_used_average_price': product_details.get('third_used_average_price', ''),
+            'amazon_current_price': product_details.get('amazon_current_price', '-'),
+            'amazon_average_price': product_details.get('amazon_average_price', '-'),
+            'third_used_current_price': product_details.get('third_used_current_price', '-'),
+            'third_used_average_price': product_details.get('third_used_average_price', '-'),
         })
 
-        upc = movie_details['upc']
+        upc = movie_details.get('upc', None)
         if upc: 
-            print('here')
             yield scrapy.Request(
                 url=f'https://www.ebay.com/sch/i.html?_nkw={upc}',
                 callback=self.parse_epid_results,
@@ -529,7 +637,6 @@ class BluRaySpider(scrapy.Spider):
                     'target_title': movie_details['title'], 
                     'max_results': 4,
                     'proxy': f'http://{os.getenv('ZYTE_KEY')}:@api.zyte.com:8011',
-                    'browserHtml': True 
                 },
                 dont_filter=True
             )
@@ -544,11 +651,10 @@ class BluRaySpider(scrapy.Spider):
         title_clean = clean_text(target_title)
 
         items = response.css("ul.srp-results > li.s-item")[:max_results]
-
         for item in items[:3]:  # Limit to first 3 for efficiency
-            ebay_title = item.css(".s-item__title::text").get()
+            ebay_title = item.css('.s-item__title > span::text').get()
             if not ebay_title:
-                continue
+                continue  
 
             match, confidence = is_title_match(title_clean, ebay_title)
             if not match:
@@ -560,8 +666,10 @@ class BluRaySpider(scrapy.Spider):
 
             query = urlparse(product_url).query
             epid = parse_qs(query).get("epid", [None])[0]
-
-            movie_details["ebay_id"] = epid
+            
+            if epid:
+                movie_details["epid"] = epid
+                break
 
         yield movie_details
 

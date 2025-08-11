@@ -79,7 +79,7 @@ class BluRaySpider(scrapy.Spider):
         super().__init__(*args, **kwargs)
         
         os.makedirs("data", exist_ok=True)
-        self.years = list(range(2010, 2025))
+        self.years = list(range(1969, 1970))
         # self.year = int(year) if year else 2019
         self.base_data_path = "data"
         # self.movies_list_path = f'dvd_list/{self.year}-list.json'
