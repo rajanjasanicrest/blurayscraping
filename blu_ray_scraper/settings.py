@@ -21,7 +21,7 @@ HTTPCACHE_ENABLED = False
 ROBOTSTXT_OBEY = False
 
 # Configure maximum concurrent requests performed by Scrapy (default: 16)
-CONCURRENT_REQUESTS = 300
+CONCURRENT_REQUESTS = 100
 
 # Configure a delay for requests for the same website (default: 0)
 # See https://docs.scrapy.org/en/latest/topics/settings.html#download-delay
@@ -32,7 +32,7 @@ CONCURRENT_REQUESTS = 300
 #CONCURRENT_REQUESTS_PER_IP = 16
 
 # Disable cookies (enabled by default)
-#COOKIES_ENABLED = False
+COOKIES_ENABLED = True
 
 # Disable Telnet Console (enabled by default)
 #TELNETCONSOLE_ENABLED = False
@@ -110,4 +110,4 @@ AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
 AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
 
 RETRY_ENABLED = True  # keep retry enabled globally
-RETRY_HTTP_CODES = [500, 502, 503, 504, 522, 524, 408]
+RETRY_HTTP_CODES = [500, 502, 503, 504, 522, 524, 403]

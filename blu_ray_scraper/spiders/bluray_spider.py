@@ -83,7 +83,7 @@ class BluRaySpiderBluRay(scrapy.Spider):
         self.years.append(1969)
         # self.year = int(year) if year else 2019
         self.base_data_path = "data"
-        self.year = str(year)
+        self.year = int(year)
         self.country = country
         print('-------')
         print(country)
